@@ -89,8 +89,16 @@ if (existsSync(path.join(root, '.env')) && existsSync(path.join(root, '.env.dock
 
   // SKIP_PULL keeps first start fast; language images are pulled on first use.
   const env = { ...process.env, SKIP_PULL: '1' };
+
+  // Prefer PowerShell 7 (`pwsh`) when it is installed, but fall back to the
+  // Windows PowerShell 5.1 that ships with the OS — setup.ps1 supports both.
+  const powershell =
+    isWindows && run('pwsh', ['-NoProfile', '-Command', 'exit 0'], { quiet: true }).code === 0
+      ? 'pwsh'
+      : 'powershell';
+
   const setup = isWindows
-    ? run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'setup.ps1'], { env })
+    ? run(powershell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'setup.ps1'], { env })
     : run('bash', ['setup.sh'], { env });
 
   if (setup.code !== 0) die('setup failed — see the output above.');

@@ -36,7 +36,14 @@ if ($LASTEXITCODE -ne 0) { Die 'Cannot talk to the Docker daemon - is Docker Des
 function New-Secret {
     param([int]$Bytes)
     $buffer = [byte[]]::new($Bytes)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($buffer)
+
+    # RandomNumberGenerator::Fill is .NET Core only, so it does not exist in
+    # Windows PowerShell 5.1 - the shell that ships with Windows, and therefore
+    # the one most people run this with. Create() is present on both .NET
+    # Framework and .NET Core, so it works everywhere.
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($buffer) } finally { $rng.Dispose() }
+
     -join ($buffer | ForEach-Object { $_.ToString('x2') })
 }
 
