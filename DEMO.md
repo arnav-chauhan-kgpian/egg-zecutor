@@ -5,24 +5,42 @@ logs, stats and any files it produced.
 
 ---
 
+## Easiest path: run it from source
+
+```bash
+git clone https://github.com/arnav-chauhan-kgpian/egg-zecutor.git
+cd egg-zecutor
+npm install
+npm run dev
+```
+
+Open **<http://localhost:3000/playground>** and sign in as `coder@example.com` / `Password123!`.
+
+`npm run dev` generates its own secrets, starts PostgreSQL, migrates, seeds, and runs both the API
+and the playground. Requires Node 20+ and a running Docker.
+
+---
+
 ## Before you hand this over
 
-This project is **not currently a git repository**, so it will most likely be shared as a zip or a
-folder copy. Three generated files contain live secrets and must not travel with it:
+If you share this as a **zip or folder copy** rather than a git clone, four generated files contain
+live secrets and must not travel with it:
 
 ```
 .env
 .env.docker
+.env.judge0
 deploy/judge0.conf
 ```
 
-Delete those three before zipping. The recipient regenerates their own with `setup`. (They are
-already listed in `.gitignore`, so if you `git init` and push instead, they are excluded
-automatically.)
+Delete those before zipping; the recipient regenerates their own on first run. They are all listed
+in `.gitignore`, so cloning or pushing excludes them automatically.
 
 ---
 
-## Run it
+## Fully containerised alternative
+
+Runs everything in Docker, including the API and frontend — no Node on the host.
 
 **Requirements:** Docker Desktop (running). Nothing else — no Node, no Python, no database.
 

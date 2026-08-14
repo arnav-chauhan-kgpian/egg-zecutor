@@ -87,8 +87,10 @@ if (existsSync(path.join(root, '.env')) && existsSync(path.join(root, '.env.dock
 } else {
   step('Generating .env files with fresh secrets (first run only)');
 
-  // SKIP_PULL keeps first start fast; language images are pulled on first use.
-  const env = { ...process.env, SKIP_PULL: '1' };
+  // Let setup pre-pull the language runner images. It adds a minute here, but
+  // the alternative is that the user's *first* code run stalls behind a cold
+  // pull with no indication of why — which reads as "the engine is broken".
+  const env = { ...process.env };
 
   // Prefer PowerShell 7 (`pwsh`) when it is installed, but fall back to the
   // Windows PowerShell 5.1 that ships with the OS — setup.ps1 supports both.
