@@ -63,7 +63,27 @@ else
     .env.docker
   rm -f .env.docker.bak
 
-  log "Wrote .env.docker"
+  # Isolate this checkout's containers and volumes.
+  #
+  # docker-compose.yml hard-codes `name: hackerrank-clone`, so without this every
+  # clone on the machine shares one Compose project — and therefore one Postgres
+  # volume. Postgres only applies POSTGRES_PASSWORD when it initialises an empty
+  # data directory, so the second clone generates fresh secrets, inherits the
+  # first clone's volume, and can never authenticate against it (P1000).
+  #
+  # COMPOSE_PROJECT_NAME takes precedence over the `name:` key, and Compose reads
+  # it straight out of this file. Project names allow [a-z0-9_-] only.
+  COMPOSE_PROJECT_NAME="$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '-' | sed 's/^[^a-z0-9]*//; s/-*$//')"
+  COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-hackerrank-clone}"
+
+  {
+    echo ""
+    echo "# Scopes this checkout's containers and volumes so a second clone on the"
+    echo "# same machine does not inherit this one's database."
+    echo "COMPOSE_PROJECT_NAME=${COMPOSE_PROJECT_NAME}"
+  } >> .env.docker
+
+  log "Wrote .env.docker (project: ${COMPOSE_PROJECT_NAME})"
 fi
 
 # ----------------------------------------------------------------------- .env

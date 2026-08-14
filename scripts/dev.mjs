@@ -157,17 +157,48 @@ function writeSqliteSchema() {
   );
 }
 
+/** The host address Compose actually published for Postgres, or '' if none. */
+function publishedPort() {
+  const result = run('docker', ['compose', 'port', 'postgres', '5432'], { quiet: true });
+  return result.code === 0 ? result.out.trim() : '';
+}
+
 if (mode === 'docker') {
   step('Starting PostgreSQL');
+
   // --wait blocks until the healthcheck passes, so migrations below cannot race
   // a database that is still starting up.
-  if (run('docker', ['compose', 'up', '-d', '--wait', 'postgres']).code !== 0) {
+  let started = run('docker', ['compose', 'up', '-d', '--wait', 'postgres'], { quiet: true });
+
+  if (started.code !== 0 && /port is already allocated|address already in use/i.test(started.out)) {
+    console.error(started.out);
     die(
-      'Could not start the postgres container.',
-      'If the port is already taken, change POSTGRES_PORT in .env and .env.docker.',
+      'Could not start PostgreSQL — the host port is already in use.',
+      'Another checkout of this project is almost certainly still running: each\n' +
+        'one publishes the same ports, so only one can be up at a time.\n\n' +
+        'Stop the other one (from ITS directory):\n\n' +
+        '    docker compose down\n\n' +
+        'or give this checkout its own port by setting POSTGRES_PORT in .env.',
     );
   }
-  info('PostgreSQL is healthy');
+
+  // A container created during a failed start is kept, and a later `up` finds
+  // it healthy and reuses it AS IS — including the port bindings that never got
+  // applied. Compose reports success, then every connection from the host is
+  // refused. Detect that specific state and rebuild the container.
+  if (started.code === 0 && !publishedPort()) {
+    info('Container has no published port (left over from a failed start) — recreating');
+    started = run('docker', ['compose', 'up', '-d', '--force-recreate', '--wait', 'postgres'], {
+      quiet: true,
+    });
+  }
+
+  if (started.code !== 0) {
+    console.error(started.out);
+    die('Could not start the postgres container.');
+  }
+
+  info(`PostgreSQL is healthy on ${publishedPort() || 'its configured port'}`);
 }
 
 step('Preparing the database');
@@ -204,17 +235,25 @@ if (applied.code !== 0) {
   // original password forever, so a correct .env still cannot log in. Prisma
   // reports this as a bare P1000 with no hint that the volume is the cause.
   const staleVolume = /\bP1000\b|authentication failed/i.test(applied.out);
+  const unreachable = /\bP1001\b|can't reach database server/i.test(applied.out);
 
-  die(
-    mode === 'docker' ? '`prisma migrate deploy` failed.' : '`prisma db push` failed.',
-    staleVolume
-      ? 'The password in .env does not match the one baked into the existing\n' +
-          'PostgreSQL volume. Postgres sets the password only when it initialises an\n' +
-          'empty data directory, so a volume from an older checkout keeps the old one.\n\n' +
-          'Discard it (this deletes local execution history, nothing else):\n\n' +
-          '    docker compose down -v && npm run dev'
-      : undefined,
-  );
+  let hint;
+  if (staleVolume) {
+    hint =
+      'The password in .env does not match the one baked into the existing\n' +
+      'PostgreSQL volume. Postgres sets the password only when it initialises an\n' +
+      'empty data directory, so a volume from an older checkout keeps the old one.\n\n' +
+      'Discard it (this deletes local execution history, nothing else):\n\n' +
+      '    docker compose down -v && npm run dev';
+  } else if (unreachable) {
+    hint =
+      'The container is running but nothing is listening on the host port.\n' +
+      'This usually means a container left over from an earlier failed start is\n' +
+      'being reused without its port bindings. Rebuild it:\n\n' +
+      '    docker compose up -d --force-recreate postgres && npm run dev';
+  }
+
+  die(mode === 'docker' ? '`prisma migrate deploy` failed.' : '`prisma db push` failed.', hint);
 }
 info(mode === 'docker' ? 'Migrations applied' : 'SQLite schema synced');
 

@@ -19,8 +19,9 @@ compiler output, exit code, CPU time, peak memory, and any files it emitted.
 > **Just want to run it?** `npm install && npm run dev`, then open
 > <http://localhost:3000/playground>. That one command generates secrets, starts PostgreSQL,
 > migrates, seeds, and runs both the API and the playground — see
-> [Quick start](#quick-start-local-development). Node 20+ and a running Docker are the only
-> prerequisites. For the fully containerised stack instead, see [DEMO.md](./DEMO.md).
+> [Quick start](#quick-start-local-development). **Node 20+ is the only hard requirement** — with
+> Docker you get PostgreSQL and a sandboxed executor, without it SQLite and an unsandboxed one.
+> For the fully containerised stack instead, see [DEMO.md](./DEMO.md).
 
 > **Refactored from a LeetCode-style grading platform.** There are no problems, no expected output
 > and no hidden test cases. `Problem`, `TestCase` and `Submission` were dropped in
@@ -146,18 +147,17 @@ Install Docker and re-run to switch to the sandboxed backend — nothing else ch
 
 `npm run dev` is idempotent and does everything the first run needs:
 
-1. checks Docker is running (Postgres and the code sandbox both need it)
-2. generates `.env` / `.env.docker` with fresh random secrets, if missing
-3. starts PostgreSQL and waits for it to be healthy
-4. runs `prisma generate`, applies migrations, seeds the two demo accounts
+1. detects whether a Docker daemon is reachable, and picks the mode above
+2. generates `.env` with fresh random secrets, if missing
+3. starts PostgreSQL and waits for it to be healthy (Docker mode only)
+4. runs `prisma generate`, applies the schema, seeds the two demo accounts
 5. installs the playground's dependencies, if missing
 6. runs the API and the playground together, prefixed `[api]` / `[web]`, until `Ctrl+C`
 
 On later runs it skips whatever is already done, so it is also just "start the app".
 
-Code executes in throwaway Docker containers (`EXECUTOR=docker`), which works on any modern host.
-Judge0 is the alternative backend and needs a cgroup v1 host — see
-[Execution backends](#execution-backends).
+Judge0 is the third backend — the one this engine is really built around — but it needs a cgroup v1
+host. See [Execution backends](#execution-backends).
 
 ### Running the pieces separately
 
@@ -753,3 +753,34 @@ not protect.
 
 Judge0 is a separate project, licensed under the GPLv3, and is used here as an unmodified upstream
 container image rather than being vendored or linked into this codebase.
+
+### Troubleshooting: a second checkout cannot reach its database
+
+`docker-compose.yml` sets `name: hackerrank-clone`, so **every clone on the machine shares one
+Compose project** — and therefore one Postgres volume — unless told otherwise. Postgres applies
+`POSTGRES_PASSWORD` only when it initialises an *empty* data directory, so a second clone generates
+its own secrets, inherits the first clone's volume, and can never authenticate against it:
+
+```
+Error: P1000: Authentication failed against database server
+```
+
+`setup` now writes a per-directory `COMPOSE_PROJECT_NAME` into `.env` to prevent this. Checkouts
+created before that was added do not have it; add it by hand:
+
+```bash
+echo "COMPOSE_PROJECT_NAME=$(basename "$PWD")" >> .env
+```
+
+Two further consequences worth knowing:
+
+- **Only one checkout can run at a time.** They all publish ports 3000, 4000 and 5435. Stop the
+  other one with `docker compose down` from its directory, or set a different `POSTGRES_PORT`.
+- **A failed start can leave a container without its port bindings.** If the first `up` fails
+  because a port was taken, Compose keeps the container; the next `up` finds it healthy and reuses
+  it as-is, so it reports success while nothing listens on the host and Prisma fails with `P1001`.
+  `npm run dev` now detects this and recreates the container, but by hand it is:
+
+  ```bash
+  docker compose up -d --force-recreate postgres
+  ```

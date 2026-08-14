@@ -87,7 +87,29 @@ if ((Test-Path .env.docker) -and -not $Force) {
         ($out -join "`n") + "`n",
         (New-Object System.Text.UTF8Encoding $false)
     )
-    Info 'Wrote .env.docker'
+    # Isolate this checkout's containers and volumes.
+    #
+    # docker-compose.yml hard-codes `name: hackerrank-clone`, so without this
+    # every clone on the machine shares one Compose project - and therefore one
+    # Postgres volume. Postgres only applies POSTGRES_PASSWORD when it
+    # initialises an empty data directory, so the second clone generates fresh
+    # secrets, inherits the first clone's volume, and can never authenticate
+    # against it (P1000).
+    #
+    # COMPOSE_PROJECT_NAME takes precedence over the `name:` key, and Compose
+    # reads it straight out of this file. Project names allow [a-z0-9_-] only.
+    $projectName = (Split-Path -Leaf $PSScriptRoot).ToLower() -replace '[^a-z0-9_-]', '-'
+    $projectName = $projectName.Trim('-')
+    if (-not $projectName) { $projectName = 'hackerrank-clone' }
+
+    Add-Content -Path (Join-Path $PSScriptRoot '.env.docker') -Value @(
+        ''
+        "# Scopes this checkout's containers and volumes so a second clone on the"
+        '# same machine does not inherit this one''s database.'
+        "COMPOSE_PROJECT_NAME=$projectName"
+    )
+
+    Info "Wrote .env.docker (project: $projectName)"
 }
 
 # ----------------------------------------------------------------------- .env
