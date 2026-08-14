@@ -141,7 +141,26 @@ info('Prisma client generated');
 const migrate = run('npx', ['prisma', 'migrate', 'deploy'], { quiet: true });
 if (migrate.code !== 0) {
   console.error(migrate.out);
-  die('`prisma migrate deploy` failed.');
+
+  // Postgres only runs its initialisation — the step that creates the user and
+  // sets the password — on an EMPTY data directory. A volume left over from a
+  // different checkout, or from before `setup --force` regenerated the
+  // secrets, keeps its original password forever, so a correct .env still
+  // cannot log in. The error is opaque unless you know that.
+  // Prisma reports this as `P1000: Authentication failed against database
+  // server ...`; the raw driver wording differs, so match both.
+  const staleVolume = /\bP1000\b|authentication failed/i.test(migrate.out);
+
+  die(
+    '`prisma migrate deploy` failed.',
+    staleVolume
+      ? 'The password in .env does not match the one baked into the existing\n' +
+          'PostgreSQL volume. Postgres sets the password only when it initialises an\n' +
+          'empty data directory, so a volume from an older checkout keeps the old one.\n\n' +
+          'Discard it (this deletes local execution history, nothing else):\n\n' +
+          '    docker compose down -v && npm run dev'
+      : undefined,
+  );
 }
 info('Migrations applied');
 
