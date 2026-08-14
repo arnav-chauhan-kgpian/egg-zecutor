@@ -1,7 +1,13 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { TOKEN_STORAGE_KEY, USER_STORAGE_KEY, login as loginRequest, register as registerRequest } from '@/lib/api';
+import {
+  SESSION_EXPIRED_EVENT,
+  TOKEN_STORAGE_KEY,
+  USER_STORAGE_KEY,
+  login as loginRequest,
+  register as registerRequest,
+} from '@/lib/api';
 import type { AuthUser } from '@/lib/types';
 
 interface AuthContextValue {
@@ -30,6 +36,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
     setReady(true);
+  }, []);
+
+  // The API layer clears the stored token when the server rejects it; this puts
+  // the UI back in its signed-out state so the sign-in form reappears, rather
+  // than leaving a stale username in the header beside a stream of 401s.
+  useEffect(() => {
+    const onExpired = () => setUser(null);
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
   }, []);
 
   const persist = useCallback((token: string, nextUser: AuthUser) => {

@@ -98,9 +98,20 @@ if ((Test-Path .env.docker) -and -not $Force) {
     #
     # COMPOSE_PROJECT_NAME takes precedence over the `name:` key, and Compose
     # reads it straight out of this file. Project names allow [a-z0-9_-] only.
-    $projectName = (Split-Path -Leaf $PSScriptRoot).ToLower() -replace '[^a-z0-9_-]', '-'
-    $projectName = $projectName.Trim('-')
-    if (-not $projectName) { $projectName = 'hackerrank-clone' }
+    # The directory name alone is not enough - two clones can easily share one
+    # (D:\egg-zecutor and D:\accenture\egg-zecutor), which puts us straight back
+    # into a shared volume. A hash of the absolute path disambiguates them.
+    $projectBase = (Split-Path -Leaf $PSScriptRoot).ToLower() -replace '[^a-z0-9_-]', '-'
+    $projectBase = $projectBase.Trim('-')
+    if (-not $projectBase) { $projectBase = 'hackerrank-clone' }
+
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    try {
+        $hashBytes = $md5.ComputeHash([Text.Encoding]::UTF8.GetBytes($PSScriptRoot.ToLower()))
+    } finally { $md5.Dispose() }
+    $projectHash = -join ($hashBytes[0..2] | ForEach-Object { $_.ToString('x2') })
+
+    $projectName = "$projectBase-$projectHash"
 
     Add-Content -Path (Join-Path $PSScriptRoot '.env.docker') -Value @(
         ''

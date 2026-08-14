@@ -36,9 +36,48 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+/** Dispatched when the API rejects the stored token, so the UI can sign out. */
+export const SESSION_EXPIRED_EVENT = 'hrc:session-expired';
+
+export function clearStoredSession(): void {
+  window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+  window.localStorage.removeItem(USER_STORAGE_KEY);
+}
+
+/** True for the endpoints that mint a token, where a 401 means "wrong password". */
+const isAuthEndpoint = (url: string | undefined) => (url ?? '').startsWith('/auth/');
+
+api.interceptors.response.use(
+  (response) => response,
+  (error: AxiosError) => {
+    // A stored token the API refuses will never start working: tokens are
+    // signed with JWT_SECRET, and every checkout of this project generates its
+    // own. Point the browser at a different checkout on the same localhost
+    // origin and it keeps presenting the old token, so every request fails with
+    // "Invalid token" until localStorage is cleared by hand. Drop it here and
+    // let the UI ask for a fresh sign-in instead.
+    if (
+      error.response?.status === 401 &&
+      !isAuthEndpoint(error.config?.url) &&
+      typeof window !== 'undefined' &&
+      window.localStorage.getItem(TOKEN_STORAGE_KEY)
+    ) {
+      clearStoredSession();
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    }
+    return Promise.reject(error);
+  },
+);
+
 /** Unwraps the API's `{ error: { message, details } }` envelope into a message. */
 export function apiErrorMessage(error: unknown): string {
   if (error instanceof AxiosError) {
+    // "Invalid token" is accurate but tells the user nothing they can act on.
+    // Say what actually happened and what fixes it.
+    if (error.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
+      return 'Your session is no longer valid — sign in again. (This happens when the API is restarted from a different checkout, which signs tokens with a different secret.)';
+    }
+
     const payload = error.response?.data as
       | { error?: { message?: string; details?: Array<{ field?: string; message?: string }> } }
       | undefined;

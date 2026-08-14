@@ -73,8 +73,15 @@ else
   #
   # COMPOSE_PROJECT_NAME takes precedence over the `name:` key, and Compose reads
   # it straight out of this file. Project names allow [a-z0-9_-] only.
-  COMPOSE_PROJECT_NAME="$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '-' | sed 's/^[^a-z0-9]*//; s/-*$//')"
-  COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-hackerrank-clone}"
+  #
+  # The directory name alone is not enough — two clones can easily share one
+  # (D:/egg-zecutor and D:/accenture/egg-zecutor), which puts us straight back
+  # into a shared volume. A checksum of the absolute path disambiguates them.
+  # cksum rather than md5sum: POSIX, and present on macOS where md5sum is not.
+  PROJECT_BASE="$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_-' '-' | sed 's/^[^a-z0-9]*//; s/-*$//')"
+  PROJECT_BASE="${PROJECT_BASE:-hackerrank-clone}"
+  PROJECT_HASH="$(printf '%s' "$PWD" | cksum | cut -d' ' -f1)"
+  COMPOSE_PROJECT_NAME="${PROJECT_BASE}-${PROJECT_HASH: -6}"
 
   {
     echo ""
