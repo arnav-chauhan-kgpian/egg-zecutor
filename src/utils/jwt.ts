@@ -1,5 +1,5 @@
 import jwt, { type SignOptions } from 'jsonwebtoken';
-import type { Role } from '@prisma/client';
+import type { Role } from '../lib/enums';
 import { env } from '../config/env';
 import { ApiError } from './ApiError';
 

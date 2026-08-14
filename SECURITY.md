@@ -19,6 +19,25 @@ Isolation is provided by whichever backend is configured, not by this codebase:
 | -------- | -------------------------------------------------------------------------- |
 | `judge0` | [`isolate`](https://github.com/ioi/isolate) — cgroup + namespace sandboxing |
 | `docker` | One throwaway container per run, with cpu/memory/pids limits                |
+| `native` | **None.** Code runs as a child process of the API                          |
+
+### `EXECUTOR=native` has no sandbox
+
+This backend exists so the project runs on a machine with no container runtime — `npm install &&
+npm run dev` and nothing else. The trade is explicit: submitted code executes with the full
+privileges of the API process and can read and write your files, open sockets, and spawn
+processes. The wall-clock timeout and captured-output cap stop *accidents*, not attackers.
+
+It is a reasonable default only when the person writing the code and the person running the server
+are the same person. Two guards enforce that:
+
+- the API refuses to start when `HOST` is not loopback while this backend is active, unless
+  `EXECUTOR_NATIVE_ALLOW_REMOTE=true` is set deliberately
+- a warning is printed on every startup
+
+`auto` only selects it when no Judge0 is configured *and* no Docker daemon answers, so enabling it
+by accident on a host that has a sandbox available is not possible. For anything multi-user or
+internet-facing, use `docker` or `judge0`.
 
 The API enforces per-run CPU time, wall time, memory, and output size, plus per-user and global
 concurrency caps. Those bound *resource* abuse. They are not a substitute for the sandbox.

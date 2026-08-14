@@ -15,33 +15,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum Role {
-  USER
-  ADMIN
-}
-
-/// Lifecycle of a single execution.
-///
-/// PENDING    accepted and persisted, not yet handed to the backend
-/// PROCESSING handed to Judge0 (token issued) or running locally
-/// COMPLETED  the program ran to a conclusion — including a non-zero exit,
-///            a compile error or a timeout. "Completed" describes the run,
-///            not the program's success.
-/// FAILED     the engine itself could not produce a result (judge unreachable,
-///            callback never arrived, internal error)
-enum ExecutionStatus {
-  PENDING
-  PROCESSING
-  COMPLETED
-  FAILED
-}
-
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
   username     String   @unique
   passwordHash String
-  role         Role     @default(USER)
+  role         String   @default("USER")
   createdAt    DateTime @default(now())
 
   executions Execution[]
@@ -62,7 +41,7 @@ model Execution {
   /// Optional free-text label so runs are findable later.
   name String?
 
-  status ExecutionStatus @default(PENDING)
+  status String @default("PENDING")
 
   /// Fed to the program on stdin.
   stdin String?

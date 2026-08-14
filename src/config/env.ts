@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { spawnSync } from 'node:child_process';
 import { z } from 'zod';
 
 const envSchema = z.object({
@@ -74,8 +75,18 @@ const envSchema = z.object({
   // --- execution backend ----------------------------------------------------
   // judge0 — the intended engine; requires JUDGE0_API_URL and a cgroup v1 host
   // docker — run locally in throwaway containers; works on cgroup v2
-  // auto   — judge0 when JUDGE0_API_URL is set, otherwise docker
-  EXECUTOR: z.enum(['auto', 'docker', 'judge0']).default('auto'),
+  // native — run as child processes of the API; NO SANDBOX, no Docker needed
+  // auto   — judge0 when JUDGE0_API_URL is set, else docker, else native
+  EXECUTOR: z.enum(['auto', 'docker', 'judge0', 'native']).default('auto'),
+  /// Interface the API listens on. Loopback by default: with EXECUTOR=native
+  /// anything else hands arbitrary code execution to the network.
+  HOST: z.string().default('127.0.0.1'),
+  /// Escape hatch for binding EXECUTOR=native to a non-loopback address. Only
+  /// set this if you genuinely intend to let other machines run code as you.
+  EXECUTOR_NATIVE_ALLOW_REMOTE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
   EXECUTOR_IMAGE_PYTHON: z.string().default('python:3.11-alpine'),
   EXECUTOR_IMAGE_NODE: z.string().default('node:20-alpine'),
   EXECUTOR_IMAGE_CPP: z.string().default('gcc:13'),
@@ -112,12 +123,56 @@ if (!parsed.success) {
 
 export const env = parsed.data;
 
-/** Which backend runs the code. */
-export const executorKind: 'docker' | 'judge0' =
-  env.EXECUTOR === 'auto' ? (env.JUDGE0_API_URL ? 'judge0' : 'docker') : env.EXECUTOR;
+/**
+ * Probes for a reachable Docker daemon.
+ *
+ * Only consulted when EXECUTOR=auto, so the cost is one short-lived process at
+ * boot. `docker version` talks to the daemon (unlike `docker --version`, which
+ * only reports the client and succeeds even when nothing is running).
+ */
+function dockerAvailable(): boolean {
+  const probe = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
+    stdio: 'ignore',
+    timeout: 5_000,
+  });
+  return probe.status === 0;
+}
+
+/**
+ * Which backend runs the code.
+ *
+ * `auto` degrades rather than failing: a configured Judge0 wins, otherwise
+ * Docker if its daemon answers, otherwise the native backend — which needs no
+ * infrastructure at all, at the cost of the sandbox.
+ */
+export const executorKind: 'docker' | 'judge0' | 'native' =
+  env.EXECUTOR !== 'auto'
+    ? env.EXECUTOR
+    : env.JUDGE0_API_URL
+      ? 'judge0'
+      : dockerAvailable()
+        ? 'docker'
+        : 'native';
 
 if (executorKind === 'judge0' && !env.JUDGE0_API_URL) {
   console.error('Invalid environment configuration:\n  - EXECUTOR=judge0 requires JUDGE0_API_URL');
+  process.exit(1);
+}
+
+// The native backend runs submitted code with this process's privileges. Bound
+// to loopback that is a local tool; bound to anything else it is remote code
+// execution as a service, so refuse rather than let it happen by accident.
+const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
+
+if (executorKind === 'native' && !LOOPBACK.has(env.HOST) && !env.EXECUTOR_NATIVE_ALLOW_REMOTE) {
+  console.error(
+    'Refusing to start: EXECUTOR=native has no sandbox, and HOST is set to ' +
+      `"${env.HOST}" rather than loopback.\n` +
+      'Anyone who can reach this port would be able to run code as you.\n\n' +
+      '  - keep HOST=127.0.0.1 (default), or\n' +
+      '  - use EXECUTOR=docker / EXECUTOR=judge0 to get a sandbox, or\n' +
+      '  - set EXECUTOR_NATIVE_ALLOW_REMOTE=true if you truly intend this.',
+  );
   process.exit(1);
 }
 

@@ -78,3 +78,47 @@ export const DOCKER_LANGUAGES: Record<number, DockerLanguageSpec> = {
 export function isDockerSupported(languageId: number): boolean {
   return languageId in DOCKER_LANGUAGES;
 }
+
+/**
+ * Ids the native backend can run, mapped to toolchains found on PATH.
+ *
+ * The native backend exists so the engine works with no Docker and no Judge0 —
+ * `npm install && npm run dev` and nothing else. It runs code as an ordinary
+ * child process of the API, so whichever interpreters and compilers the user
+ * already has installed are the language set. Anything missing is reported by
+ * name rather than failing obscurely.
+ *
+ * `candidates` is ordered: the first executable found on PATH wins. Windows
+ * ships `python`, most Unixes ship `python3`, and a machine can have both.
+ */
+export interface NativeLanguageSpec {
+  filename: string;
+  /** Compiled languages: build to `out`, then execute `out` directly. */
+  compiler?: { candidates: string[]; args: (source: string, out: string) => string[] };
+  /** Interpreted languages: run `candidate <args>`. */
+  interpreter?: { candidates: string[]; args: (source: string) => string[] };
+}
+
+export const NATIVE_LANGUAGES: Record<number, NativeLanguageSpec> = {
+  70: { filename: 'main.py', interpreter: { candidates: ['python3', 'python'], args: (s) => [s] } },
+  71: { filename: 'main.py', interpreter: { candidates: ['python3', 'python'], args: (s) => [s] } },
+  63: { filename: 'main.js', interpreter: { candidates: ['node'], args: (s) => [s] } },
+  // `bash` only: toolchain detection probes with --version, which dash-derived
+  // /bin/sh does not support.
+  46: { filename: 'main.sh', interpreter: { candidates: ['bash'], args: (s) => [s] } },
+  50: {
+    filename: 'main.c',
+    compiler: { candidates: ['gcc', 'cc', 'clang'], args: (s, out) => ['-O2', '-o', out, s] },
+  },
+  54: {
+    filename: 'main.cpp',
+    compiler: {
+      candidates: ['g++', 'c++', 'clang++'],
+      args: (s, out) => ['-O2', '-std=c++17', '-o', out, s],
+    },
+  },
+};
+
+export function isNativeSupported(languageId: number): boolean {
+  return languageId in NATIVE_LANGUAGES;
+}

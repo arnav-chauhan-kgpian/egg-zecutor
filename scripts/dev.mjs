@@ -4,22 +4,22 @@
  *
  *   npm run dev
  *
- * Takes a fresh clone to a running API + playground with no other steps. Every
- * stage is idempotent, so this is also the right command on the second run and
- * the hundredth — it skips whatever is already done.
+ * Takes a fresh clone to a running API + playground with no other steps, and is
+ * idempotent, so it is equally the first-run command and the everyday one.
  *
- *   1. check Docker is up          (Postgres and code execution both need it)
- *   2. generate .env* if missing   (delegates to setup.sh / setup.ps1)
- *   3. start Postgres, wait healthy
- *   4. prisma generate + migrate deploy + seed
- *   5. install web dependencies if missing
- *   6. run the API and the playground together until Ctrl+C
+ * It picks one of two modes depending on what the machine has:
+ *
+ *   Docker present  PostgreSQL in a container, code executed in throwaway
+ *                   containers. Sandboxed. This is the recommended mode.
+ *   No Docker       SQLite file, code executed as child processes of the API.
+ *                   NO SANDBOX — see the warning printed at startup.
  *
  * Deliberately dependency-free: adding `concurrently` to run two processes
  * would mean an npm install before the script that performs the npm install.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -62,68 +62,120 @@ function run(command, args, options = {}) {
   return { code: result.status ?? 1, out: `${result.stdout ?? ''}${result.stderr ?? ''}` };
 }
 
-// --- 1. Docker ---------------------------------------------------------------
-
-step('Checking Docker');
-if (run('docker', ['info'], { quiet: true }).code !== 0) {
-  die(
-    'Docker is not running.',
-    'This project needs Docker for two things: the PostgreSQL container, and\n' +
-      'the sandbox that executes submitted code.\n\n' +
-      '  • Windows / macOS — start Docker Desktop and re-run `npm run dev`\n' +
-      '  • Linux           — `sudo systemctl start docker`',
-  );
+/** True when a working `<tool> --version` exists on PATH. */
+function toolPresent(tool) {
+  return spawnSync(tool, ['--version'], { stdio: 'ignore', timeout: 5_000 }).status === 0;
 }
-info('Docker is running');
 
-// --- 2. Environment ----------------------------------------------------------
+// --- mode selection ----------------------------------------------------------
 
-// .env is what plain `docker compose` and the host-side Prisma CLI read;
-// .env.docker is what the containerised stack reads. setup generates both,
-// plus deploy/judge0.conf, with freshly random secrets.
-if (existsSync(path.join(root, '.env')) && existsSync(path.join(root, '.env.docker'))) {
-  step('Environment already configured');
-  info('.env and .env.docker present — leaving them alone');
+step('Checking what this machine has');
+
+// `docker version` talks to the daemon; `docker --version` only reports the
+// client and succeeds even when nothing is running.
+const hasDocker =
+  run('docker', ['version', '--format', '{{.Server.Version}}'], { quiet: true }).code === 0;
+
+const mode = hasDocker ? 'docker' : 'native';
+
+if (hasDocker) {
+  info('Docker is running — using PostgreSQL and the sandboxed Docker executor');
 } else {
-  step('Generating .env files with fresh secrets (first run only)');
+  info('No Docker daemon — using SQLite and the native executor (no sandbox)');
+}
 
-  // Let setup pre-pull the language runner images. It adds a minute here, but
-  // the alternative is that the user's *first* code run stalls behind a cold
-  // pull with no indication of why — which reads as "the engine is broken".
-  const env = { ...process.env };
+// --- environment -------------------------------------------------------------
+
+const envPath = path.join(root, '.env');
+
+if (existsSync(envPath)) {
+  step('Environment already configured');
+  info('.env present — leaving it alone');
+} else if (mode === 'docker') {
+  step('Generating .env files with fresh secrets (first run only)');
 
   // Prefer PowerShell 7 (`pwsh`) when it is installed, but fall back to the
   // Windows PowerShell 5.1 that ships with the OS — setup.ps1 supports both.
-  const powershell =
-    isWindows && run('pwsh', ['-NoProfile', '-Command', 'exit 0'], { quiet: true }).code === 0
-      ? 'pwsh'
-      : 'powershell';
+  const powershell = isWindows && toolPresent('pwsh') ? 'pwsh' : 'powershell';
 
   const setup = isWindows
-    ? run(powershell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'setup.ps1'], { env })
-    : run('bash', ['setup.sh'], { env });
+    ? run(powershell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'setup.ps1'])
+    : run('bash', ['setup.sh']);
 
   if (setup.code !== 0) die('setup failed — see the output above.');
+} else {
+  // setup.sh/setup.ps1 both require a reachable Docker daemon (they render
+  // compose config and pre-pull runner images), so native mode writes its own
+  // much smaller env instead of trying to reuse them.
+  step('Generating .env for zero-setup mode (first run only)');
+
+  writeFileSync(
+    envPath,
+    [
+      '# Generated by `npm run dev` on a machine without Docker.',
+      '#',
+      '# SQLite means no database server to install; EXECUTOR=native means code',
+      '# runs as a child process of the API, with NO SANDBOX. Install Docker and',
+      '# delete this file to switch to the isolated backend.',
+      'NODE_ENV=development',
+      'PORT=4000',
+      '# Loopback only. The API refuses to start on a public interface while',
+      '# EXECUTOR=native, because that would be remote code execution as you.',
+      'HOST=127.0.0.1',
+      '',
+      '# Relative to prisma/, where the schema lives.',
+      'DATABASE_URL="file:./dev.db"',
+      `JWT_SECRET=${randomBytes(48).toString('hex')}`,
+      'EXECUTOR=native',
+      'CORS_ORIGIN=*',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  info('Wrote .env (SQLite + native executor)');
 }
 
-// --- 3. Postgres -------------------------------------------------------------
+// --- database ----------------------------------------------------------------
 
-step('Starting PostgreSQL');
-// --wait blocks until the healthcheck passes, so migrations below cannot race
-// a database that is still starting up.
-if (run('docker', ['compose', 'up', '-d', '--wait', 'postgres']).code !== 0) {
-  die(
-    'Could not start the postgres container.',
-    'If the port is already taken, change POSTGRES_PORT in .env and .env.docker.',
+// Prisma cannot take `provider` from an env var, so the SQLite build is a copy
+// of the canonical schema with only the datasource swapped. Regenerated every
+// run, so it cannot drift from prisma/schema.prisma.
+const SQLITE_SCHEMA = path.join(root, 'prisma', 'schema.sqlite.prisma');
+
+function writeSqliteSchema() {
+  const canonical = readFileSync(path.join(root, 'prisma', 'schema.prisma'), 'utf8');
+  const swapped = canonical.replace(/provider\s*=\s*"postgresql"/, 'provider = "sqlite"');
+
+  if (swapped === canonical) {
+    die('Could not derive the SQLite schema — the datasource block in prisma/schema.prisma changed.');
+  }
+
+  writeFileSync(
+    SQLITE_SCHEMA,
+    `// GENERATED by scripts/dev.mjs from schema.prisma — do not edit.\n${swapped}`,
+    'utf8',
   );
 }
-info('PostgreSQL is healthy');
 
-// --- 4. Database schema ------------------------------------------------------
+if (mode === 'docker') {
+  step('Starting PostgreSQL');
+  // --wait blocks until the healthcheck passes, so migrations below cannot race
+  // a database that is still starting up.
+  if (run('docker', ['compose', 'up', '-d', '--wait', 'postgres']).code !== 0) {
+    die(
+      'Could not start the postgres container.',
+      'If the port is already taken, change POSTGRES_PORT in .env and .env.docker.',
+    );
+  }
+  info('PostgreSQL is healthy');
+}
 
 step('Preparing the database');
 
-const generate = run('npx', ['prisma', 'generate'], { quiet: true });
+const schemaArgs = mode === 'native' ? ['--schema', SQLITE_SCHEMA] : [];
+if (mode === 'native') writeSqliteSchema();
+
+const generate = run('npx', ['prisma', 'generate', ...schemaArgs], { quiet: true });
 if (generate.code !== 0) {
   console.error(generate.out);
   die(
@@ -135,24 +187,26 @@ if (generate.code !== 0) {
 }
 info('Prisma client generated');
 
-// migrate deploy (not dev): applies the checked-in migrations without ever
-// prompting or offering to reset, which is the right behaviour for a script
-// somebody is running for the first time.
-const migrate = run('npx', ['prisma', 'migrate', 'deploy'], { quiet: true });
-if (migrate.code !== 0) {
-  console.error(migrate.out);
+// Postgres gets the checked-in migrations. SQLite gets `db push`: the migration
+// history is Postgres-specific SQL, and a local scratch database does not need
+// a history — the schema is the only thing that matters.
+const applied =
+  mode === 'docker'
+    ? run('npx', ['prisma', 'migrate', 'deploy'], { quiet: true })
+    : run('npx', ['prisma', 'db', 'push', '--skip-generate', ...schemaArgs], { quiet: true });
+
+if (applied.code !== 0) {
+  console.error(applied.out);
 
   // Postgres only runs its initialisation — the step that creates the user and
   // sets the password — on an EMPTY data directory. A volume left over from a
-  // different checkout, or from before `setup --force` regenerated the
-  // secrets, keeps its original password forever, so a correct .env still
-  // cannot log in. The error is opaque unless you know that.
-  // Prisma reports this as `P1000: Authentication failed against database
-  // server ...`; the raw driver wording differs, so match both.
-  const staleVolume = /\bP1000\b|authentication failed/i.test(migrate.out);
+  // different checkout, or from before the secrets were regenerated, keeps its
+  // original password forever, so a correct .env still cannot log in. Prisma
+  // reports this as a bare P1000 with no hint that the volume is the cause.
+  const staleVolume = /\bP1000\b|authentication failed/i.test(applied.out);
 
   die(
-    '`prisma migrate deploy` failed.',
+    mode === 'docker' ? '`prisma migrate deploy` failed.' : '`prisma db push` failed.',
     staleVolume
       ? 'The password in .env does not match the one baked into the existing\n' +
           'PostgreSQL volume. Postgres sets the password only when it initialises an\n' +
@@ -162,14 +216,14 @@ if (migrate.code !== 0) {
       : undefined,
   );
 }
-info('Migrations applied');
+info(mode === 'docker' ? 'Migrations applied' : 'SQLite schema synced');
 
 // The seed upserts two accounts, so re-running it is harmless.
-const seed = run('npx', ['prisma', 'db', 'seed'], { quiet: true });
+const seed = run('npx', ['prisma', 'db', 'seed', ...schemaArgs], { quiet: true });
 if (seed.code === 0) info('Seed accounts ready');
 else warn('Seeding failed — the app will still run, but the demo logins may be missing.');
 
-// --- 5. Web dependencies -----------------------------------------------------
+// --- web dependencies --------------------------------------------------------
 
 if (existsSync(path.join(root, 'web', 'node_modules'))) {
   step('Playground dependencies already installed');
@@ -180,7 +234,34 @@ if (existsSync(path.join(root, 'web', 'node_modules'))) {
   }
 }
 
-// --- 6. Run both -------------------------------------------------------------
+// --- run both ----------------------------------------------------------------
+
+if (mode === 'native') {
+  // Report the language set up front. Without this the first failed run looks
+  // like an engine bug rather than a missing compiler.
+  const toolchains = [
+    ['Python', ['python3', 'python']],
+    ['Node.js', ['node']],
+    ['C / C++', ['gcc', 'g++']],
+    ['Bash', ['bash']],
+  ];
+
+  step('Languages available natively');
+  for (const [label, candidates] of toolchains) {
+    const found = candidates.find(toolPresent);
+    info(found ? `${label}: ${found}` : `${label}: not installed — runs will report this`);
+  }
+
+  console.log(`
+${paint('33;1', '  ⚠  NO SANDBOX')}
+
+  Docker was not found, so submitted code runs as a child of the API with your
+  files, network and privileges. That is fine while you are the only one
+  writing the code — it is not safe to expose. The API is bound to 127.0.0.1
+  and will refuse to start on a public interface in this mode.
+
+  Install Docker and re-run for the isolated backend.`);
+}
 
 console.log(`
 ${paint('32;1', '✓ Ready')}

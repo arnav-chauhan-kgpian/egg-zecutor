@@ -25,3 +25,8 @@ deploy/judge0.conf
 !.env.example
 !.env.docker.example
 !.env.local.example
+
+# Derived from schema.prisma by `npm run dev` for the no-Docker (SQLite) mode.
+prisma/schema.sqlite.prisma
+prisma/*.db
+prisma/*.db-journal

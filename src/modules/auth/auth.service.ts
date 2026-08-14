@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import type { User } from '@prisma/client';
 import { env } from '../../config/env';
+import { toRole } from '../../lib/enums';
 import { prisma } from '../../lib/prisma';
 import { ApiError } from '../../utils/ApiError';
 import { signAccessToken } from '../../utils/jwt';
@@ -18,7 +19,9 @@ function issueToken(user: User) {
     sub: user.id,
     email: user.email,
     username: user.username,
-    role: user.role,
+    // The column is TEXT rather than a DB enum (so one schema serves both
+    // PostgreSQL and SQLite), so narrow before it becomes a signed claim.
+    role: toRole(user.role),
   });
 }
 

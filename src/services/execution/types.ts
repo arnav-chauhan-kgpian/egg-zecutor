@@ -51,7 +51,7 @@ export type StartResult =
   | { kind: 'settled'; outcome: ExecutionOutcome };
 
 export interface ExecutionBackend {
-  readonly kind: 'judge0' | 'docker';
+  readonly kind: 'judge0' | 'docker' | 'native';
   /** True when results arrive via the webhook rather than polling. */
   readonly usesCallback: boolean;
   start(spec: ExecutionSpec): Promise<StartResult>;

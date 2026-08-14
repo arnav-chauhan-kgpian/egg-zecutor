@@ -5,7 +5,8 @@
  * All this does is guarantee two accounts exist so the playground is usable
  * immediately after `migrate deploy`.
  */
-import { PrismaClient, Role } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
+import { Role } from '../src/lib/enums';
 import bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();

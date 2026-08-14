@@ -12,7 +12,7 @@
  *
  * Only runs when the active backend defers; the Docker backend settles inline.
  */
-import { ExecutionStatus } from '@prisma/client';
+import { ExecutionStatus } from '../../lib/enums';
 import { env } from '../../config/env';
 import { prisma } from '../../lib/prisma';
 import { backend } from '../../services/execution';

@@ -119,7 +119,7 @@ raise one, raise the other.
 
 ## Quick start (local development)
 
-Two commands from a fresh clone. Node 20+ and a running Docker are the only prerequisites.
+Two commands from a fresh clone. **Node 20+ is the only hard requirement.**
 
 ```bash
 npm install
@@ -128,6 +128,21 @@ npm run dev
 
 Then open **<http://localhost:3000/playground>** and sign in as `coder@example.com` /
 `Password123!`.
+
+`npm run dev` adapts to what the machine has:
+
+| | Database | Code execution | Sandbox |
+| --- | --- | --- | --- |
+| **Docker present** | PostgreSQL in a container | throwaway container per run | yes |
+| **No Docker** | SQLite file (`prisma/dev.db`) | child process of the API | **no** |
+
+Both modes are fully functional — same API, same playground, same artifacts. Without Docker you
+get whatever interpreters are already on your PATH (Python, Node, and a C/C++ compiler if you have
+one), and **no isolation**: submitted code runs with your privileges. That is fine when you are the
+only person writing the code, which is the point of the mode; it is not safe to expose. The API
+binds to `127.0.0.1` and refuses to start on a public interface while it is active.
+
+Install Docker and re-run to switch to the sandboxed backend — nothing else changes.
 
 `npm run dev` is idempotent and does everything the first run needs:
 
@@ -499,7 +514,16 @@ only `web` and `api` are meant to be public (put a TLS-terminating reverse proxy
 | -------- | ------------------------------------------------------------------------------- |
 | `docker` | One throwaway container per run. Works on cgroup v2. Subset of languages.        |
 | `judge0` | Use a Judge0 server. Needs `JUDGE0_API_URL` *and* a cgroup v1 host.              |
-| `auto`   | Default — `judge0` if `JUDGE0_API_URL` is set, otherwise `docker`.               |
+| `native` | Child process of the API. **No sandbox**, no Docker. Uses toolchains on PATH.    |
+| `auto`   | Default — `judge0` if `JUDGE0_API_URL` is set, else `docker` if its daemon answers, else `native`. |
+
+`native` exists so the engine works with no infrastructure at all, which is what makes
+`npm install && npm run dev` sufficient on a machine without Docker. It is the only backend with no
+isolation: submitted code runs with the API process's privileges, and the wall-clock timeout and
+output cap bound accidents, not attackers. It also cannot enforce a memory limit (no cgroup, so
+`memoryKb` is `null`), reports wall-clock rather than CPU time, and rejects `additionalFiles`
+instead of silently ignoring a dataset it cannot unpack. The API refuses to bind to a non-loopback
+`HOST` while it is active unless `EXECUTOR_NATIVE_ALLOW_REMOTE=true` is set explicitly.
 
 `EXECUTOR=docker` is the default in `.env.docker` because Judge0 cannot run here (below). It mounts
 `/var/run/docker.sock` into `api` and spawns siblings against the host daemon. Each run gets:

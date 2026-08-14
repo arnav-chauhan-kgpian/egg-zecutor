@@ -4,29 +4,30 @@ Thanks for taking a look. Issues and pull requests are welcome.
 
 ## Getting set up
 
-Docker Desktop is the only hard prerequisite for running the stack:
-
-```bash
-./setup.sh          # or .\setup.ps1 on Windows — generates secrets into .env*
-docker compose --env-file .env.docker up -d
-```
-
-That runs the **local Docker backend** (`EXECUTOR=docker`), which works on any modern host. See
-[DEMO.md](./DEMO.md) for the guided version.
-
-For API work without Docker, you need Node 20+ and a PostgreSQL you can point `DATABASE_URL` at:
+Node 20+ is the only hard prerequisite:
 
 ```bash
 npm install
-npx prisma migrate dev
-npm run dev         # tsx watch, port 4000
+npm run dev
 ```
 
-The frontend is independent:
+That brings up the API and the playground together. With Docker running it uses PostgreSQL and the
+sandboxed Docker executor; without Docker it falls back to SQLite and the **unsandboxed** native
+executor, which is fine for local work but never for anything exposed — see
+[SECURITY.md](./SECURITY.md).
+
+Note that a change touching the execution path should be checked against a **sandboxed** backend,
+since the native one has no isolation and different limits (no memory cap, wall-clock rather than
+CPU time, no `additionalFiles`).
+
+The pieces run independently too:
 
 ```bash
-cd web && npm install && npm run dev    # port 3000
+npm run dev:api     # tsx watch, port 4000
+npm run dev:web     # next dev, port 3000
 ```
+
+For the fully containerised stack, see [DEMO.md](./DEMO.md).
 
 ## Before you open a PR
 
