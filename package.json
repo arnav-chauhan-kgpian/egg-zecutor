@@ -4,8 +4,14 @@
   "private": true,
   "description": "Backend API for a competitive programming platform",
   "main": "dist/server.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "tsx watch src/server.ts",
+    "dev:web": "npm --prefix web run dev",
+    "e2e": "bash scripts/e2e.sh",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",

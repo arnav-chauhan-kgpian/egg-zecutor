@@ -16,8 +16,11 @@ compiler output, exit code, CPU time, peak memory, and any files it emitted.
 └─ web/  Execution Playground (Next.js App Router, port 3000)
 ```
 
-> **Just want to run it?** See **[DEMO.md](./DEMO.md)** — `./setup.sh` (or `.\setup.ps1`) then
-> `docker compose up -d`. Docker Desktop is the only prerequisite.
+> **Just want to run it?** `npm install && npm run dev`, then open
+> <http://localhost:3000/playground>. That one command generates secrets, starts PostgreSQL,
+> migrates, seeds, and runs both the API and the playground — see
+> [Quick start](#quick-start-local-development). Node 20+ and a running Docker are the only
+> prerequisites. For the fully containerised stack instead, see [DEMO.md](./DEMO.md).
 
 > **Refactored from a LeetCode-style grading platform.** There are no problems, no expected output
 > and no hidden test cases. `Problem`, `TestCase` and `Submission` were dropped in
@@ -114,36 +117,55 @@ raise one, raise the other.
 > **Deploying?** Jump to [Production deployment](#production-deployment) — one command brings up
 > the API, frontend, PostgreSQL and Judge0.
 
-## Getting started (local development)
+## Quick start (local development)
+
+Two commands from a fresh clone. Node 20+ and a running Docker are the only prerequisites.
 
 ```bash
 npm install
-cp .env.example .env      # then edit JWT_SECRET and DATABASE_URL
+npm run dev
 ```
 
-Start just PostgreSQL from the stack (or point `DATABASE_URL` at any reachable instance):
+Then open **<http://localhost:3000/playground>** and sign in as `coder@example.com` /
+`Password123!`.
+
+`npm run dev` is idempotent and does everything the first run needs:
+
+1. checks Docker is running (Postgres and the code sandbox both need it)
+2. generates `.env` / `.env.docker` with fresh random secrets, if missing
+3. starts PostgreSQL and waits for it to be healthy
+4. runs `prisma generate`, applies migrations, seeds the two demo accounts
+5. installs the playground's dependencies, if missing
+6. runs the API and the playground together, prefixed `[api]` / `[web]`, until `Ctrl+C`
+
+On later runs it skips whatever is already done, so it is also just "start the app".
+
+Code executes in throwaway Docker containers (`EXECUTOR=docker`), which works on any modern host.
+Judge0 is the alternative backend and needs a cgroup v1 host — see
+[Execution backends](#execution-backends).
+
+### Running the pieces separately
+
+`npm run dev` is a convenience, not a requirement. Nothing depends on it:
 
 ```bash
-docker compose --env-file .env.docker up -d postgres
+npm run dev:api      # API only  — tsx watch, port 4000
+npm run dev:web      # playground only — next dev, port 3000
 ```
 
-Apply the schema and seed data:
-
-```bash
-npm run prisma:generate   # generate the Prisma client
-npm run prisma:migrate    # create/apply migrations
-npm run seed              # 2 users (admin + coder)
-npm run dev               # http://localhost:4000
-```
-
-`prisma/migrations/0_init/migration.sql` is checked in, so on a fresh database
-`npm run prisma:deploy` also works without generating a new migration.
+Both read the same `.env`. If you would rather wire the database up by hand, point `DATABASE_URL`
+at any reachable PostgreSQL and run `npm run prisma:deploy && npm run seed`.
+`prisma/migrations/0_init/migration.sql` is checked in, so `prisma migrate deploy` works against a
+fresh database without generating a migration first.
 
 ### Scripts
 
 | Script                   | Purpose                                       |
 | ------------------------ | --------------------------------------------- |
-| `npm run dev`            | Dev server with watch mode                    |
+| `npm run dev`            | **Everything**: Postgres, migrations, seed, API + playground |
+| `npm run dev:api`        | API only, watch mode (port 4000)              |
+| `npm run dev:web`        | Playground only (port 3000)                   |
+| `npm run e2e`            | End-to-end suite against a running stack      |
 | `npm run build`          | Compile TypeScript to `dist/`                 |
 | `npm start`              | Run the compiled server                       |
 | `npm run typecheck`      | Type-check without emitting                   |
